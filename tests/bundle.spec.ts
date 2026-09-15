@@ -52,7 +52,7 @@ describe('Tencent CodeBuddy profile bundle', () => {
 function composedRows(
   baseIds: readonly string[],
   warnings: string[] = [],
-): Map<string, { id?: string; name?: string; config?: unknown; disabled?: boolean }> {
+) {
   return new Map(composeEntries([
     [{ insert: baseIds.map(id => ({ id, name: `test-${id}` })) }],
     loadOverlayPatches(`${packageDir}-test`, patchPath),
