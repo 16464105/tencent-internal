@@ -3,7 +3,7 @@
  * fixed route, `tencent-internal`, with a fixed OpenAI Chat Completions
  * endpoint, the request normalization observed from the CodeBuddy client, and
  * a package-owned fixed model catalog. Configuration layers a `models` list
- * over that catalog; the Settings → CodeBuddy page stores the key.
+ * over that catalog; the Settings → CodeBuddy page stores the key and the catalog override.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -57,7 +57,7 @@ export interface Config {
   /**
    * Model catalog served by this route. Omission serves the package's fixed
    * catalog unchanged; an explicit list replaces it. Catalog edits stay in
-   * `settings.yaml` or Cordis config; the Settings page stores the key.
+   * `settings.yaml` or Cordis config; the Settings page stores the key and the catalog.
    */
   models?: PiAiModelProfile[]
   /** HTTP/provider SDK timeout in milliseconds. */
@@ -169,8 +169,8 @@ export function apply(ctx: Context, config: Config): void {
       onPayload: normalizeTencentPayload,
     }),
   })
-  // The Settings → CodeBuddy page owns the key; this route is not a Models
-  // card. Out-of-tree installs cannot curate `ui-settings-models` layouts.
+  // The Settings → CodeBuddy page owns the key and catalog; this route is not
+  // a Models card. Out-of-tree installs cannot curate `ui-settings-models`.
   const registration = ctx.llm.registerAdapter([TENCENT_CODEBUDDY_PROVIDER], adapter)
   let registeredPolicy = profiles().get(TENCENT_CODEBUDDY_PROVIDER)?.retryPolicy
   const ensureRegistrationFacts = (): void => {

@@ -2,7 +2,7 @@
 
 可安装的 dsh profile 组合包：注册 `tencent-internal` 路由、随包模型目录，并把默认模型设为 `tencent-internal/hy3-ioa`。
 
-在 **设置 → CodeBuddy** 或凭据服务中填写 CodeBuddy Key（`TENCENT_CODEBUDDY_API_KEY`）。首次进入不会弹出填 Key 对话框。本包自带 `dsh.client` 设置页，因此 git 安装不依赖 Models 页面的布局。
+在 **设置 → CodeBuddy** 保存 CodeBuddy Key（`TENCENT_CODEBUDDY_API_KEY`）并编辑模型目录，或通过凭据服务存储该 Key。首次进入不会弹出填 Key 对话框。本包自带 `dsh.client` 设置页，因此 git 安装不依赖 Models 页面的布局。
 
 [English](README.md) | 中文
 

@@ -9,12 +9,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  CodeBuddySection, type CodeBuddySettingsInjected,
+  CodeBuddySection, CODEBUDDY_SETTINGS_NS, type CodeBuddySettingsInjected,
 } from './CodeBuddySection.tsx'
 import { en, zh, type CodeBuddySettingsKey } from './locales.ts'
 
-export type { CodeBuddySettingsInjected, CodeBuddySettingsProps } from './CodeBuddySection.tsx'
-export { CODEBUDDY_API_KEY_REF } from './CodeBuddySection.tsx'
+export type {
+  CodeBuddySettingsInjected, CodeBuddySettingsProps, CodeBuddySettingsSnapshot, CodeBuddySettingsWrite,
+} from './CodeBuddySection.tsx'
+export { CODEBUDDY_API_KEY_REF, CODEBUDDY_SETTINGS_NS } from './CodeBuddySection.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -28,7 +30,7 @@ const NS = 'settings.codebuddy'
 /**
  * Required services before the section can register.
  */
-export const inject = ['slots', 'locale', 'remote', 'remote.credentials']
+export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'remote.settings']
 
 /**
  * Register the CodeBuddy settings page once `settings.section` is declared.
@@ -46,6 +48,19 @@ export function apply(ctx: ClientContext): void {
     storeCredential: async (ref, value) => {
       const response = await ctx.remote.credentials.set(ref, value)
       return response.ok ? undefined : response.error.message
+    },
+    describeSettings: async () => {
+      const response = await ctx.remote.settings.describe()
+      if (!response.ok) return undefined
+      return {
+        writable: response.value.writable,
+        namespace: response.value.namespaces.find(item => item.ns === CODEBUDDY_SETTINGS_NS),
+      }
+    },
+    writeSettings: async (ops, expectedRevision) => {
+      const response = await ctx.remote.settings.mutate(CODEBUDDY_SETTINGS_NS, ops, expectedRevision)
+      if (response.ok) return { kind: 'written', view: response.value }
+      return { kind: 'refused', error: response.error.message }
     },
   })
   ctx.slots.inject('settings.section', () => ctx.slots.register({

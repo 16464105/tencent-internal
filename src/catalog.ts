@@ -10,7 +10,7 @@
  * Configuration layers over it: a `models` list in the plugin config or the
  * `llm-tencent-codebuddy` settings section replaces this catalog wholesale.
  * Catalog edits stay in `settings.yaml` or Cordis config; the Settings page
- * stores the key.
+ * stores the key and the catalog override.
  *
  * @module dsh-llm-tencent-codebuddy/catalog
  */
