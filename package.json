@@ -9,7 +9,9 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "prepare": "tsdown --config tsdown.prepare.config.ts"
+    "prepare": "tsdown --config tsdown.prepare.config.ts && node build-client.mjs",
+    "build:host": "tsdown --config tsdown.prepare.config.ts",
+    "build:client": "node build-client.mjs"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -22,6 +24,9 @@
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -29,6 +34,7 @@
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "lib/client.js",
     "cordis.patch.yml",
     "src"
   ],
@@ -40,10 +46,22 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/dsh-api-remotes": "*",
+    "@deepseek-ai/dsh-client-locale": "*",
+    "@deepseek-ai/dsh-client-ui-settings": "*",
+    "@deepseek-ai/dsh-client-ui-slots": "*",
     "@deepseek-ai/dsh-credentials": "*",
     "@deepseek-ai/dsh-invariants": "*",
     "@deepseek-ai/dsh-launch-environment": "*",
@@ -52,9 +70,11 @@
     "@deepseek-ai/dsh-settings": "*",
     "@deepseek-ai/dsh-timeout": "*",
     "@deepseek-ai/dsh-util-values": "*",
-    "@deepseek-ai/schemastery": "^3.18.0"
+    "@deepseek-ai/schemastery": "^3.18.0",
+    "react": "^18.2.0"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "tsdown": "^0.22.2"
   }
 }

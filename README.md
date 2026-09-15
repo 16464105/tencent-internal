@@ -2,7 +2,7 @@
 
 Installable dsh profile bundle: the `tencent-internal` route, a package-owned model catalog, and `tencent-internal/hy3-ioa` as the default model.
 
-Store the CodeBuddy key on the Models page or through the credentials service (`TENCENT_CODEBUDDY_API_KEY`). First-run does not prompt for it.
+Store the CodeBuddy key on **Settings → CodeBuddy** or through the credentials service (`TENCENT_CODEBUDDY_API_KEY`). First-run does not prompt for it. The package ships a `dsh.client` settings page, so a git install does not need a Models-page layout.
 
 English | [中文](README.zh.md)
 

@@ -3,7 +3,7 @@
  * fixed route, `tencent-internal`, with a fixed OpenAI Chat Completions
  * endpoint, the request normalization observed from the CodeBuddy client, and
  * a package-owned fixed model catalog. Configuration layers a `models` list
- * over that catalog, which is how the Models page edits the directory.
+ * over that catalog; the Settings → CodeBuddy page stores the key.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -44,7 +44,7 @@ export const inject = ['llm']
 export const TENCENT_CODEBUDDY_PROVIDER = 'tencent-internal'
 /** Default Tencent internal model selected by this bundle's profile patch. */
 export const TENCENT_CODEBUDDY_MODEL = 'hy3-ioa'
-/** Credential reference written by the Models page for this route. */
+/** Credential reference written by the Settings → CodeBuddy page for this route. */
 export const TENCENT_CODEBUDDY_API_KEY = 'TENCENT_CODEBUDDY_API_KEY'
 
 const NS = 'llm-tencent-codebuddy'
@@ -56,8 +56,8 @@ export interface Config {
   apiKeyEnv?: string
   /**
    * Model catalog served by this route. Omission serves the package's fixed
-   * catalog unchanged; an explicit list replaces it. The Models page writes
-   * the full list when the user customizes the directory.
+   * catalog unchanged; an explicit list replaces it. Catalog edits stay in
+   * `settings.yaml` or Cordis config; the Settings page stores the key.
    */
   models?: PiAiModelProfile[]
   /** HTTP/provider SDK timeout in milliseconds. */
@@ -121,7 +121,12 @@ function profileFrom(
   })
 }
 
-/** Register the Tencent route with its fixed catalog and key-only settings namespace. */
+/**
+ * Register the Tencent route with its fixed catalog and key-only settings namespace.
+ * @param ctx - Cordis context carrying `llm` and optional `settings`/`credentials`.
+ * @param config - schema-normalized plugin config.
+ * @returns nothing; registration lives on the fiber.
+ */
 export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
   let lastRaw: Config | undefined
@@ -164,12 +169,8 @@ export function apply(ctx: Context, config: Config): void {
       onPayload: normalizeTencentPayload,
     }),
   })
-  ctx.llm.registerConfigurableProviders([{
-    provider: TENCENT_CODEBUDDY_PROVIDER,
-    displayName: 'Tencent CodeBuddy',
-    settingsNs: NS,
-    settingsPath: [],
-  }])
+  // The Settings → CodeBuddy page owns the key; this route is not a Models
+  // card. Out-of-tree installs cannot curate `ui-settings-models` layouts.
   const registration = ctx.llm.registerAdapter([TENCENT_CODEBUDDY_PROVIDER], adapter)
   let registeredPolicy = profiles().get(TENCENT_CODEBUDDY_PROVIDER)?.retryPolicy
   const ensureRegistrationFacts = (): void => {

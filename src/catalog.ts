@@ -8,8 +8,9 @@
  * output cap, image support, and reasoning capability.
  *
  * Configuration layers over it: a `models` list in the plugin config or the
- * `llm-tencent-codebuddy` settings section replaces this catalog wholesale,
- * which is how the Models page edits the directory.
+ * `llm-tencent-codebuddy` settings section replaces this catalog wholesale.
+ * Catalog edits stay in `settings.yaml` or Cordis config; the Settings page
+ * stores the key.
  *
  * @module dsh-llm-tencent-codebuddy/catalog
  */
