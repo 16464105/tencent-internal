@@ -1,0 +1,9 @@
+# Optional profile bundle: Tencent CodeBuddy route plus the key-only default.
+- id: agent-default-model
+  config:
+    provider: tencent-internal
+    model: gpt-5.6-sol
+
+- insert:
+    - id: llm-tencent-codebuddy
+      name: '@deepseek-ai/dsh-llm-tencent-codebuddy'
