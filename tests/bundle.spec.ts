@@ -22,7 +22,7 @@ describe('Tencent CodeBuddy profile bundle', () => {
     ])
     expect(rows.get('agent-default-model')?.config).toEqual({
       provider: 'tencent-internal',
-      model: 'gpt-5.6-sol',
+      model: 'hy3-ioa',
     })
     expect(rows.get('ui-settings-models')?.config).toBeUndefined()
     expect(rows.get('llm-tencent-codebuddy')?.name).toBe('@deepseek-ai/dsh-llm-tencent-codebuddy')

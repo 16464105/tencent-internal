@@ -1,6 +1,6 @@
 # Tencent CodeBuddy for DeepSeek Harness
 
-Installable dsh profile bundle: the `tencent-internal` route, a package-owned model catalog, and `tencent-internal/gpt-5.6-sol` as the default model.
+Installable dsh profile bundle: the `tencent-internal` route, a package-owned model catalog, and `tencent-internal/hy3-ioa` as the default model.
 
 Store the CodeBuddy key on the Models page or through the credentials service (`TENCENT_CODEBUDDY_API_KEY`). First-run does not prompt for it.
 
@@ -48,7 +48,7 @@ Do not add this bundle to a profile that already inserts `llm-tencent-codebuddy`
 | Display name | `Tencent CodeBuddy` |
 | Endpoint | `https://copilot.tencent.com/v2` |
 | Protocol | OpenAI Chat Completions |
-| Default model | `gpt-5.6-sol` |
+| Default model | `hy3-ioa` |
 | Default credential | `TENCENT_CODEBUDDY_API_KEY` |
 
 Official DeepSeek stays mounted. The endpoint, protocol, headers, and catalog stay package-owned; callers cannot redirect the trusted key to another endpoint through settings.

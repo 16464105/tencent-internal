@@ -1,6 +1,6 @@
 # DeepSeek Harness 的腾讯 CodeBuddy 插件
 
-可安装的 dsh profile 组合包：注册 `tencent-internal` 路由、随包模型目录，并把默认模型设为 `tencent-internal/gpt-5.6-sol`。
+可安装的 dsh profile 组合包：注册 `tencent-internal` 路由、随包模型目录，并把默认模型设为 `tencent-internal/hy3-ioa`。
 
 在 Models 页面或凭据服务中填写 CodeBuddy Key（`TENCENT_CODEBUDDY_API_KEY`）。首次进入不会弹出填 Key 对话框。
 
@@ -48,7 +48,7 @@ dsh plugin --profile web add file:/absolute/path/to/tencent-internal
 | 显示名 | `Tencent CodeBuddy` |
 | 接口 | `https://copilot.tencent.com/v2` |
 | 协议 | OpenAI Chat Completions |
-| 默认模型 | `gpt-5.6-sol` |
+| 默认模型 | `hy3-ioa` |
 | 默认凭据 | `TENCENT_CODEBUDDY_API_KEY` |
 
 官方 DeepSeek 仍然保留。接口地址、协议、请求头和模型目录由本包固定；不能通过设置把受信任 Key 指到别的地址。

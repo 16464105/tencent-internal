@@ -2,7 +2,7 @@
 - id: agent-default-model
   config:
     provider: tencent-internal
-    model: gpt-5.6-sol
+    model: hy3-ioa
 
 - insert:
     - id: llm-tencent-codebuddy
