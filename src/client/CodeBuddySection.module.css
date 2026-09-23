@@ -180,9 +180,33 @@
 .modelHeader,
 .modelRow {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 120px 120px 28px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 120px 120px 92px 28px;
   align-items: center;
   gap: 6px;
+}
+
+.modelCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.modelCheckbox input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+
+.modelCheckbox input:disabled {
+  cursor: default;
+  opacity: .5;
 }
 
 .modelHeader {

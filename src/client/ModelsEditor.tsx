@@ -39,6 +39,17 @@ function parseBufferKey(key: string): { field: string; index: number } {
   return { field: key.slice(0, split), index: Number(key.slice(split + 1)) }
 }
 
+/** Read whether one draft declares image input in its `input` array. */
+function acceptsImages(model: ModelDraft): boolean {
+  const input = model['input']
+  return Array.isArray(input) && input.includes('image')
+}
+
+/** The `input` array to store for one draft when images are toggled on or off. */
+function inputModes(withImages: boolean): string[] {
+  return withImages ? ['text', 'image'] : ['text']
+}
+
 function patchRow(
   models: readonly ModelDraft[],
   index: number,
@@ -100,14 +111,17 @@ export function ModelsEditor(props: ModelsEditorProps): ReactNode {
     })
   }
 
-  const captions = [props.t('modelId'), props.t('modelName'), props.t('contextWindow'), props.t('maxTokens')]
+  const captions = [
+    props.t('modelId'), props.t('modelName'), props.t('contextWindow'), props.t('maxTokens'),
+    props.t('supportsImage'),
+  ]
 
   const restoreDefaults = (): void => {
     setBuffers(new Map())
     props.onReset()
   }
   const appendBlank = (): void => {
-    commit([...props.models.map(row => ({ ...row })), { id: '' }])
+    commit([...props.models.map(row => ({ ...row })), { id: '', input: inputModes(true) }])
   }
   const status = props.overridden ? props.t('modelsCustomized') : props.t('modelsInherited')
 
@@ -182,6 +196,18 @@ export function ModelsEditor(props: ModelsEditorProps): ReactNode {
                       onBlur={() => { finishCapacity(index, field) }}
                     />
                   ))}
+                  <label className={styles['modelCheckbox']}>
+                    <input
+                      type="checkbox"
+                      checked={acceptsImages(model)}
+                      aria-label={`${props.t('supportsImage')} ${n}`}
+                      disabled={props.disabled}
+                      onChange={(event) => {
+                        commit(patchRow(props.models, index, 'input', inputModes(event.target.checked)))
+                      }}
+                    />
+                    <span>{props.t('supportsImage')}</span>
+                  </label>
                   <button
                     type="button"
                     className={`${styles['iconButton']} ${styles['iconButtonDanger']}`}
