@@ -6,7 +6,7 @@
  * over that catalog; the Settings → CodeBuddy page stores the key and the catalog override.
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
@@ -90,16 +90,49 @@ const modelProfile = z.object({
 
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
-  apiKeyEnv: z.string().role('credential-ref').default(TENCENT_CODEBUDDY_API_KEY),
+  // dsh ≥ 0.1.7 projects a plugin's Config into the Settings service from its
+  // volatile fields alone. A non-volatile field is invisible to the forms API:
+  // the `llm-tencent-codebuddy` namespace would never be described (the page
+  // then reports a missing section) and writes to it would be refused. These
+  // two fields are the ones the Settings → CodeBuddy page edits live.
+  apiKeyEnv: z.string().role('credential-ref').default(TENCENT_CODEBUDDY_API_KEY).volatile(),
   // The fixed catalog is the schema default: an absent field materializes
   // the whole directory, an explicit empty list clears it (same contract as
   // the direct DeepSeek adapter's advisory catalog), and a list replaces it.
-  models: z.array(modelProfile).default([...TENCENT_CODEBUDDY_MODELS]),
+  models: z.array(modelProfile).default([...TENCENT_CODEBUDDY_MODELS]).volatile(),
   timeoutMs: z.natural(),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS)
     .default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   retryPolicy: RetryPolicySchema,
 })
+
+/**
+ * Read one config field, resolving the live reference a volatile schema field
+ * wraps. Programmatic configs (tests, direct installs) pass plain values.
+ * @param value - configured value, volatile or plain.
+ * @returns the underlying value.
+ */
+function valueOf<T>(value: T | { readonly get: () => T }): T {
+  const reference = value as { readonly get?: () => T } | null
+  return typeof reference === 'object' && reference !== null && typeof reference.get === 'function'
+    ? reference.get()
+    : value as T
+}
+
+/**
+ * Detach every field of a config so a live edit is observable by identity.
+ * @param config - plugin config, volatile fields included.
+ * @returns one plain config.
+ */
+function snapshotOf(config: Config): Config {
+  return {
+    apiKeyEnv: valueOf(config.apiKeyEnv),
+    models: valueOf(config.models),
+    timeoutMs: valueOf(config.timeoutMs),
+    streamIdleTimeoutMs: valueOf(config.streamIdleTimeoutMs),
+    retryPolicy: valueOf(config.retryPolicy),
+  }
+}
 
 function profileFrom(
   config: Config,
@@ -122,6 +155,22 @@ function profileFrom(
 }
 
 /**
+ * The Settings seam across Host versions. dsh 0.1.7 removed `installSection`
+ * and derives a section from the plugin entry's Config instead, leaving
+ * `configure` to turn the generated page off for a package that ships its own.
+ */
+interface SettingsSeam {
+  installSection?: (
+    owner: Context,
+    ns: string,
+    schema: z<Config>,
+    config: Config,
+    hooks: { setSource(source: () => Config): void; onChange(): void },
+  ) => void
+  configure(presentation: { auto?: boolean }, owner: Fiber): () => void
+}
+
+/**
  * Register the Tencent route with its fixed catalog and key-only settings namespace.
  * @param ctx - Cordis context carrying `llm` and optional `settings`/`credentials`.
  * @param config - schema-normalized plugin config.
@@ -129,14 +178,25 @@ function profileFrom(
  */
 export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
-  let lastRaw: Config | undefined
-  let lastProfiles: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
+  let cached: {
+    readonly key: readonly unknown[]
+    readonly profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>
+  } | undefined
+  let syncRegistration: (() => void) | undefined
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
-    const raw = current()
-    if (raw === lastRaw && lastProfiles !== undefined) return lastProfiles
-    lastRaw = raw
-    lastProfiles = profileFrom(raw)
-    return lastProfiles
+    const snapshot = snapshotOf(current())
+    const key = [
+      snapshot.apiKeyEnv, snapshot.models, snapshot.timeoutMs,
+      snapshot.streamIdleTimeoutMs, snapshot.retryPolicy,
+    ]
+    const hit = cached
+    if (hit !== undefined && hit.key.every((value, index) => value === key[index])) return hit.profiles
+    const next = profileFrom(snapshot)
+    cached = { key, profiles: next }
+    // A volatile edit lands without restarting the plugin, so the registration
+    // facts are refreshed whenever the resolved snapshot moved.
+    syncRegistration?.()
+    return next
   }
   profiles()
 
@@ -173,17 +233,26 @@ export function apply(ctx: Context, config: Config): void {
   // a Models card. Out-of-tree installs cannot curate `ui-settings-models`.
   const registration = ctx.llm.registerAdapter([TENCENT_CODEBUDDY_PROVIDER], adapter)
   let registeredPolicy = profiles().get(TENCENT_CODEBUDDY_PROVIDER)?.retryPolicy
-  const ensureRegistrationFacts = (): void => {
+  syncRegistration = (): void => {
     const next = profiles().get(TENCENT_CODEBUDDY_PROVIDER)?.retryPolicy
     if (deepEqualJson(next, registeredPolicy)) return
     registration.replace([TENCENT_CODEBUDDY_PROVIDER])
     registeredPolicy = next
   }
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
-      setSource: (source) => { current = source },
-      onChange: ensureRegistrationFacts,
-    })
+    const settings = settingsCtx.settings as SettingsSeam
+    // ≤ 0.1.6: the Host needs an explicit section and pushes config changes
+    // back through `setSource`. ≥ 0.1.7: the section is derived from this
+    // entry's Config, so all that is left is keeping the Host from rendering a
+    // generated page beside the page this package ships.
+    if (typeof settings.installSection === 'function') {
+      settings.installSection(ctx, NS, Config, config, {
+        setSource: (source) => { current = source },
+        onChange: () => syncRegistration?.(),
+      })
+      return
+    }
+    settingsCtx.effect(() => settings.configure({ auto: false }, ctx.fiber))
   })
 }
 

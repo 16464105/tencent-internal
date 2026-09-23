@@ -69,3 +69,12 @@ Official DeepSeek stays mounted. The endpoint, protocol, headers, and catalog st
     retryPolicy:
       mode: normal
 ```
+
+## Host compatibility
+
+| dsh | How the Settings → CodeBuddy section is registered |
+|---|---|
+| ≥ 0.1.7 | The Settings service derives the section from this entry's Config. The package declares `apiKeyEnv` and `models` **volatile** (the forms API projects volatile fields only) and turns the generated plugin page off, so its own page stays the single place to edit the key and the catalog. |
+| ≤ 0.1.6 | The package calls `settings.installSection()` and follows config pushes through `setSource`, as before. |
+
+A non-volatile `models` on ≥ 0.1.7 leaves the `llm-tencent-codebuddy` namespace undescribed — the page then reports "Host has not registered this adapter's settings section" — and makes catalog writes fail.

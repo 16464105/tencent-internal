@@ -5,7 +5,7 @@
 
 import { useState, type ReactNode } from 'react'
 import {
-  IconPlusOutline16, IconTrashOutline16,
+  IconPlusOutlineRegular, IconTrashOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CodeBuddySettingsKey } from './locales.ts'
 import { formatCapacity, parseCapacity, type ModelDraft } from './models.ts'
@@ -190,7 +190,7 @@ export function ModelsEditor(props: ModelsEditorProps): ReactNode {
                     disabled={props.disabled}
                     onClick={() => { dropRow(index) }}
                   >
-                    <IconTrashOutline16 size={14} />
+                    <IconTrashOutlineRegular size={14} />
                   </button>
                 </div>
               )
@@ -199,7 +199,7 @@ export function ModelsEditor(props: ModelsEditorProps): ReactNode {
         )}
       <button type="button" className={styles['addModelButton']} disabled={props.disabled} onClick={appendBlank}>
         {props.t('addModel')}
-        <IconPlusOutline16 size={14} />
+        <IconPlusOutlineRegular size={14} />
       </button>
     </section>
   )

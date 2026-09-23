@@ -69,3 +69,12 @@ dsh plugin --profile web add file:/absolute/path/to/tencent-internal
     retryPolicy:
       mode: normal
 ```
+
+## 宿主版本兼容
+
+| dsh | 「设置 → CodeBuddy」分区是怎么注册的 |
+|---|---|
+| ≥ 0.1.7 | 设置服务直接由本条目的 Config 推导出分区。本包把 `apiKeyEnv` 与 `models` 声明为 **volatile**（表单接口只投影 volatile 字段），并关掉自动生成的插件页，因此自带的设置页仍是编辑 Key 与模型目录的唯一入口。 |
+| ≤ 0.1.6 | 仍走 `settings.installSection()`，并通过 `setSource` 接收配置回推。 |
+
+在 ≥ 0.1.7 上如果把 `models` 写成非 volatile，表单接口就投影不出 `llm-tencent-codebuddy` 命名空间——页面会显示「Host 尚未注册该适配器的 settings 分区」，且目录写入会被拒绝。

@@ -42,20 +42,30 @@ vi.mock('@deepseek-ai/dsh-llm-pi-ai', async (importOriginal) => {
 
 import { apply, TENCENT_CODEBUDDY_PROVIDER } from '../src/index.ts'
 
-function providerContext(): {
+function providerContext(options: { legacy?: boolean } = {}): {
   ctx: Context
   info: ReturnType<typeof vi.fn>
   replace: ReturnType<typeof vi.fn>
+  configure: ReturnType<typeof vi.fn>
 } {
   const info = vi.fn()
   const replace = vi.fn()
+  const configure = vi.fn(() => () => {})
+  // dsh ≤ 0.1.6 exposes `installSection`; 0.1.7 dropped it and derives the
+  // section from this entry's Config, leaving `configure` to suppress the
+  // generated page beside the one this package ships.
+  const settings = options.legacy === false
+    ? { configure }
+    : { installSection: settingsInstall, configure }
   const ctx = {
-    get: (name: string) => name === 'settings' ? { installSection: settingsInstall } : state.services.get(name),
-    settings: { installSection: settingsInstall },
+    fiber: { uid: 0 },
+    get: (name: string) => name === 'settings' ? settings : state.services.get(name),
+    settings,
     inject: (_dependencies: readonly string[], callback: (injected: Context) => void) => {
       callback(ctx)
       return () => {}
     },
+    effect: (callback: () => () => void) => callback(),
     logger: { info },
     llm: {
       registerAdapter: vi.fn(() => ({ replace })),
@@ -63,7 +73,7 @@ function providerContext(): {
       registerModelDiscovery: vi.fn(),
     },
   } as unknown as Context
-  return { ctx, info, replace }
+  return { ctx, info, replace, configure }
 }
 
 function profile(options: PiAiAdapterOptions): ResolvedPiAiProviderProfile {
@@ -171,6 +181,33 @@ describe('Tencent provider wiring', () => {
     const merged = profile(options)
     const piModels = merged.piProvider!.getModels()
     expect(piModels.map(model => model.id)).toEqual(['gateway-extra'])
+  })
+
+  it('registers through the Host Config projection once installSection is gone', () => {
+    // dsh 0.1.7 removed `installSection`: the section is derived from this
+    // entry's Config, so the package only turns the generated page off because
+    // it ships its own Settings → CodeBuddy page.
+    const { ctx, configure } = providerContext({ legacy: false })
+
+    apply(ctx, {})
+
+    expect(configure).toHaveBeenCalledWith({ auto: false }, (ctx as { fiber: unknown }).fiber)
+    expect(state.settingsHooks).toHaveLength(0)
+  })
+
+  it('follows a volatile models reference without a plugin restart', () => {
+    const { ctx } = providerContext({ legacy: false })
+    let models: Config['models'] = [{ id: 'gateway-extra', name: 'Gateway Extra' }]
+    const volatileModels = { get: (): Config['models'] => models }
+
+    apply(ctx, { models: volatileModels as unknown as Config['models'] })
+
+    const options = state.adapterOptions[0]
+    if (options === undefined) throw new Error('expected adapter options')
+    expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['gateway-extra'])
+    // A live catalog edit replaces the reference the volatile field wraps.
+    models = [{ id: 'gateway-new', name: 'Gateway New' }]
+    expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['gateway-new'])
   })
 
   it('uses credential defaults when optional config and services are absent', async () => {

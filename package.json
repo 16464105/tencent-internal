@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-llm-tencent-codebuddy",
   "description": "Installable Tencent CodeBuddy profile bundle for DeepSeek Harness",
-  "version": "0.1.5-rc.2",
+  "version": "0.1.6-rc.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
