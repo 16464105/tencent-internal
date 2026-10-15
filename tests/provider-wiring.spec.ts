@@ -272,6 +272,19 @@ describe('Tencent provider wiring', () => {
     expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['tt-retired'])
   })
 
+  it('reads an empty configured list as no override instead of a route with no models', async () => {
+    // pi-ai refuses a route that resolves no models: `tencent-internal` is not
+    // in its installed catalog, so an empty `models` is not "serve nothing"
+    // but a registration that cannot be made at all.
+    const { ctx } = providerContext()
+
+    apply(ctx, { models: [] })
+
+    const options = state.adapterOptions[0]
+    if (options === undefined) throw new Error('expected adapter options')
+    expect(profile(options).piProvider!.getModels().length).toBeGreaterThan(0)
+  })
+
   it('registers through the Host Config projection once installSection is gone', () => {
     // dsh 0.1.7 removed `installSection`: the section is derived from this
     // entry's Config, so the package only turns the generated page off because

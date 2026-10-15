@@ -111,8 +111,22 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
 
   useEffect(() => {
     let stale = false
-    void describeCatalog().then((status) => { if (!stale) setCatalogStatus(status) })
-    return () => { stale = true }
+    let retry: ReturnType<typeof setTimeout> | undefined
+    void describeCatalog().then((status) => {
+      if (stale) return
+      setCatalogStatus(status)
+      // The page can open while the first read is still in flight; ask once
+      // more rather than leaving the page on "reading…" forever.
+      if (status?.source === 'pending') {
+        retry = setTimeout(() => {
+          void describeCatalog().then((next) => { if (!stale) setCatalogStatus(next) })
+        }, 2000)
+      }
+    })
+    return () => {
+      stale = true
+      if (retry !== undefined) clearTimeout(retry)
+    }
   }, [describeCatalog])
 
   const syncModels = async (): Promise<void> => {
@@ -186,9 +200,11 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
     const signature = status.source === 'tt-switch' && status.signature === 'unchecked'
       ? ` ${t('catalogSignatureUnchecked')}`
       : ''
-    const error = status.error === undefined ? '' : ` ${status.error}`
-    return `${body}${signature}${error}`
+    return `${body}${signature}`
   })()
+  // The reason a read failed is the whole answer to "where are my models"; it
+  // gets its own line rather than trailing the status sentence.
+  const catalogError = catalogStatus?.error
 
   const save = async (): Promise<void> => {
     const value = keyDraft.trim()
@@ -275,6 +291,9 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
       {catalogOrigin === undefined
         ? null
         : <p className={styles['status']} role="status">{catalogOrigin}</p>}
+      {catalogError === undefined
+        ? null
+        : <p className={styles['failure']} role="alert">{catalogError}</p>}
       {catalog}
       {shownFailure === undefined
         ? null

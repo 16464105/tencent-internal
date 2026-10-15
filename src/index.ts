@@ -111,9 +111,10 @@ export const Config: z<Config> = z.object({
   // then reports a missing section) and writes to it would be refused. These
   // two fields are the ones the Settings → CodeBuddy page edits live.
   apiKeyEnv: z.string().role('credential-ref').default(TENCENT_CODEBUDDY_API_KEY).volatile(),
-  // The fixed catalog is the schema default: an absent field materializes
-  // the whole directory, an explicit empty list clears it (same contract as
-  // the direct DeepSeek adapter's advisory catalog), and a list replaces it.
+  // The signed/checked-in catalog is the schema default: an absent field
+  // materializes the whole directory and a list replaces it. An explicit
+  // empty list is read as no override rather than "serve nothing", because a
+  // route with no models cannot be registered at all.
   models: z.array(modelProfile).default([...TENCENT_CODEBUDDY_MODELS]).volatile(),
   // Not volatile, so the forms API never surfaces it: a signing key is not a
   // field the Settings page should carry, and leaving it out of the described
@@ -189,6 +190,9 @@ export interface CatalogStatus {
  * client — and is therefore the list the machine starts out with; beneath that,
  * the catalog checked in here, so a machine the release file never reached
  * still has an answer.
+ * An empty list is treated as no override: pi-ai refuses a route that resolves
+ * no models — `tencent-internal` is not in its installed catalog, so an empty
+ * list is not "serve nothing" but a route that cannot be registered at all.
  * @param configured - `models` from the current config snapshot.
  * @param ttSwitch - the last successful signed read, when there is one.
  * @returns the models to register.
@@ -197,7 +201,8 @@ function effectiveCatalog(
   configured: readonly PiAiModelProfile[] | undefined,
   ttSwitch: readonly PiAiModelProfile[] | undefined,
 ): readonly PiAiModelProfile[] {
-  if (configured !== undefined && !deepEqualJson(configured, TENCENT_CODEBUDDY_MODELS)) return configured
+  if (configured !== undefined && configured.length > 0
+    && !deepEqualJson(configured, TENCENT_CODEBUDDY_MODELS)) return configured
   return ttSwitch ?? TENCENT_CODEBUDDY_MODELS
 }
 
