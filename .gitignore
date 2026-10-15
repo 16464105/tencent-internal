@@ -1,3 +1,8 @@
-lib/
+# lib/ is committed on purpose: profile bundles install this package straight
+# from GitHub (github:/file:/link), where a `prepare` build runs only when the
+# consumer's pnpm allowBuilds allowlist names this exact tarball. Shipping the
+# built output is what the other GitHub-installed bundles do.
 node_modules/
 *.tsbuildinfo
+# Client sourcemaps are debugging output, not installable content.
+lib/*.map

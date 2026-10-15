@@ -14,19 +14,10 @@
     "build:client": "node build-client.mjs"
   },
   "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
-    "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
-      "default": "./lib/invariant.js"
-    },
-    "./client": {
-      "default": "./lib/client.js"
-    },
+    ".": "./lib/index.js",
+    "./invariant": "./lib/invariant.js",
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -54,6 +45,17 @@
         "@deepseek-ai/dsh-client-locale"
       ],
       "platform": "web"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.7",
+      "dshReleases": {
+        "0.1.7": "compatible",
+        "0.2.1-alpha.1": "compatible"
+      },
+      "node": "^22.19.0 || >=24.0.0",
+      "profiles": [
+        "web"
+      ]
     }
   },
   "peerDependencies": {
