@@ -61,9 +61,7 @@ With no `models` configured, the route serves the first source that answers, in 
 |---|---|---|
 | 1 | `models` from the Cordis row (Settings → CodeBuddy) | — |
 | 2 | The signed tt-switch release (`releases/tencent_models.json`) | nothing from this machine |
-| 3 | Upstream `/v3/config` | a stored credential |
-| 4 | The local CodeBuddy desktop client's cache | the desktop client |
-| 5 | The catalog checked into this package | — |
+| 3 | The catalog checked into this package | — |
 
 The tt-switch release is the list the machine starts out with: it is the same file the tt-switch binary reads, it is signed (`HMAC-SHA256` over the Base64 payload), and it needs neither a key nor a desktop client. It refreshes in the background every 10 minutes; a failed read keeps the previous list.
 

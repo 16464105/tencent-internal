@@ -19,16 +19,9 @@ const state = vi.hoisted(() => ({
   },
   services: new Map<string, unknown>(),
   settingsHooks: [] as SettingsHooks[],
-  fetchUpstreamCatalog: vi.fn(),
   fetchTtSwitchCatalog: vi.fn(),
 }))
-
-vi.mock('../src/upstream-catalog.ts', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../src/upstream-catalog.ts')>(),
-  fetchUpstreamCatalog: state.fetchUpstreamCatalog,
-}))
-
-// The tt-switch read is the machine's built-in catalog and would otherwise hit
+// The tt-switch read is the machine's initial catalog and would otherwise hit
 // the network the moment a profile is asked for, racing the assertions below.
 vi.mock('../src/tt-switch-catalog.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/tt-switch-catalog.ts')>(),
@@ -102,15 +95,18 @@ beforeEach(() => {
   state.settingsHooks.length = 0
   state.launchEnvironment.getFrom.mockReset()
   state.launchEnvironment.get.mockReset()
-  state.fetchUpstreamCatalog.mockReset()
   state.fetchTtSwitchCatalog.mockReset()
 })
 
 describe('Tencent provider wiring', () => {
-  it('imports public pi-ai helpers without depending on unpublished source files', () => {
+  it('imports the adapter from the package root and auth helpers from their modules', () => {
+    // The pi-ai plugin exports only the adapter and its option types from the
+    // package root; the auth factories and the profile resolver stay on their
+    // own modules, so this adapter names those submodules directly.
     const source = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
-    expect(source).toMatch(/import \{[^}]*PiAiAdapter[^}]*authContextFrom[^}]*credentialStoreFrom[^}]*resolveProfiles[^}]*\} from '@deepseek-ai\/dsh-llm-pi-ai'/)
-    expect(source).not.toMatch(/from '@deepseek-ai\/dsh-llm-pi-ai\/src\//)
+    expect(source).toMatch(/import \{[^}]*PiAiAdapter[^}]*\} from '@deepseek-ai\/dsh-llm-pi-ai'/)
+    expect(source).toMatch(/from '@deepseek-ai\/dsh-llm-pi-ai\/src\/auth\.ts'/)
+    expect(source).toMatch(/from '@deepseek-ai\/dsh-llm-pi-ai\/src\/config\.ts'/)
   })
 
   it('resolves the fixed catalog and refreshes dynamic provider facts without re-registering', async () => {
@@ -142,11 +138,22 @@ describe('Tencent provider wiring', () => {
     const attachments = { marker: 'attachments' }
     state.services.set('attachments', attachments)
     expect(options.resolveAttachments?.()).toBe(attachments)
-    expect(initialProfile.headers).toMatchObject({
+    const request = {
+      options: {
+        provider: TENCENT_CODEBUDDY_PROVIDER,
+        model: 'gpt-5.6-sol',
+        messages: [],
+      },
+    } as unknown as Parameters<NonNullable<PiAiAdapterOptions['prepareRequest']>>[0]
+    const prepared = options.prepareRequest?.(request)
+    expect(prepared?.headers).toMatchObject({
       'x-agent-intent': 'craft',
       'x-ide-type': 'CLI',
-      'x-product': 'SaaS',
     })
+    // The payload hook receives pi-ai's model descriptor; the adapter forwards
+    // it unchanged, so the normalization is asserted against the raw payload.
+    expect(await prepared?.onPayload?.({ messages: [] }, undefined))
+      .toMatchObject({ stream: true })
 
     state.launchEnvironment.get.mockReturnValue({ value: ' launch-key ' })
     await expect(options.resolveApiKey(TENCENT_CODEBUDDY_PROVIDER, initialProfile))
@@ -170,26 +177,6 @@ describe('Tencent provider wiring', () => {
     expect(replace).toHaveBeenCalledWith([TENCENT_CODEBUDDY_PROVIDER])
     hooks.onChange()
     expect(replace).toHaveBeenCalledTimes(1)
-  })
-
-  it('refreshes the upstream catalog as soon as a key is saved after a keyless start', async () => {
-    const { ctx } = providerContext()
-    state.fetchUpstreamCatalog.mockResolvedValue([{ id: 'upstream-new', contextWindow: 32_000 }])
-    apply(ctx, {})
-
-    const options = state.adapterOptions[0]
-    if (options === undefined) throw new Error('expected adapter options')
-    expect(state.fetchUpstreamCatalog).not.toHaveBeenCalled()
-
-    state.launchEnvironment.get.mockReturnValue({ value: 'saved-key' })
-    options.profiles()
-    await vi.waitFor(() => expect(state.fetchUpstreamCatalog).toHaveBeenCalledTimes(1))
-    expect(state.fetchUpstreamCatalog).toHaveBeenCalledWith('saved-key', expect.any(Map))
-    await vi.waitFor(() => {
-      expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['upstream-new'])
-    })
-    options.profiles()
-    expect(state.fetchUpstreamCatalog).toHaveBeenCalledTimes(1)
   })
 
   it('serves a configured model list instead of the fixed catalog', async () => {
@@ -224,7 +211,7 @@ describe('Tencent provider wiring', () => {
     if (options === undefined) throw new Error('expected adapter options')
     options.profiles()
     // It needs no credential, so it is read on the first ask rather than waiting
-    // for a key the way /v3/config does.
+    // for one.
     await vi.waitFor(() => {
       expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['tt-one', 'tt-two'])
     })

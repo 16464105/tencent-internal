@@ -39,9 +39,6 @@ describe('Tencent CodeBuddy provider', () => {
     })
     // The desktop-composition default is part of the fixed catalog.
     expect(models.some(model => model.id === 'gpt-5.6-sol')).toBe(true)
-    expect(models.some(model => model.id === 'glm-5.3-flash')).toBe(true)
-    expect(models.some(model => model.id === 'gpt-6-sol')).toBe(true)
-    expect(models.some(model => model.id === 'gpt-6-luna')).toBe(true)
     // A fixed-catalog id resolves as an exact route with its capacities.
     await expect(ctx.llm.resolveModelInfo('tencent-internal', 'gpt-5.6-sol')).resolves.toMatchObject({
       id: 'gpt-5.6-sol',

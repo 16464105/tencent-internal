@@ -61,9 +61,7 @@ dsh plugin --profile web add file:/absolute/path/to/tencent-internal
 |---|---|---|
 | 1 | Cordis 行里的 `models`（设置 → CodeBuddy） | — |
 | 2 | tt-switch 签名发布文件（`releases/tencent_models.json`） | 本机什么都不需要 |
-| 3 | 上游 `/v3/config` | 已保存凭据 |
-| 4 | 本地 CodeBuddy 桌面端的缓存 | 装了桌面端 |
-| 5 | 随包内置的目录 | — |
+| 3 | 随包内置的目录 | — |
 
 tt-switch 发布文件是本机一开始就有的那份目录：它与 tt-switch 二进制读的是同一个文件，带签名（对 Base64 payload 做 HMAC-SHA256），既不需要 Key 也不需要桌面端。每 10 分钟后台刷新一次；读取失败时继续沿用上一次的目录。
 
