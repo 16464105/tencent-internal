@@ -173,15 +173,25 @@ describe('tt-switch read', () => {
     }))
 
     await expect(fetchTtSwitchCatalog({ key: KEY, fetchImpl: fetchImpl as unknown as typeof fetch }))
-      .resolves.toMatchObject({ signatureVerified: true })
+      .resolves.toEqual({ ok: true, catalog: expect.objectContaining({ signatureVerified: true }) })
     expect(fetchImpl).toHaveBeenCalledWith(TT_SWITCH_CATALOG_URL, expect.objectContaining({ method: 'GET' }))
   })
 
-  it('yields nothing instead of throwing when the read fails', async () => {
+  it('reports why a read yielded nothing instead of throwing', async () => {
     const notOk = vi.fn(async () => new Response('nope', { status: 404 }))
     const throws = vi.fn(async () => { throw new Error('offline') })
+    const notJson = vi.fn(async () => new Response('nope', { status: 200 }))
+    const empty = vi.fn(async () => new Response(JSON.stringify(envelope({ models: [] })), { status: 200 }))
 
-    await expect(fetchTtSwitchCatalog({ fetchImpl: notOk as unknown as typeof fetch })).resolves.toBeUndefined()
-    await expect(fetchTtSwitchCatalog({ fetchImpl: throws as unknown as typeof fetch })).resolves.toBeUndefined()
+    // A machine with no route to the release file must say so, not look like
+    // one that never asked.
+    await expect(fetchTtSwitchCatalog({ fetchImpl: notOk as unknown as typeof fetch }))
+      .resolves.toEqual({ ok: false, reason: expect.stringContaining('HTTP 404') })
+    await expect(fetchTtSwitchCatalog({ fetchImpl: throws as unknown as typeof fetch }))
+      .resolves.toEqual({ ok: false, reason: expect.stringContaining('unreachable') })
+    await expect(fetchTtSwitchCatalog({ fetchImpl: notJson as unknown as typeof fetch }))
+      .resolves.toEqual({ ok: false, reason: expect.stringContaining('did not answer with JSON') })
+    await expect(fetchTtSwitchCatalog({ fetchImpl: empty as unknown as typeof fetch }))
+      .resolves.toEqual({ ok: false, reason: expect.stringContaining('no usable catalog') })
   })
 })

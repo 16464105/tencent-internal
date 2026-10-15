@@ -68,7 +68,13 @@ function providerContext(options: { legacy?: boolean } = {}): {
     fiber: { uid: 0 },
     get: (name: string) => name === 'settings' ? settings : state.services.get(name),
     settings,
-    inject: (_dependencies: readonly string[], callback: (injected: Context) => void) => {
+    // Faithful to cordis: the callback runs only when every dependency is
+    // present, so an optional service — the Web carrier — is simply absent in
+    // a headless composition instead of being handed an undefined service.
+    inject: (dependencies: readonly string[], callback: (injected: Context) => void) => {
+      const missing = dependencies
+        .filter(name => name === 'settings' ? settings === undefined : !state.services.has(name))
+      if (missing.length > 0) return () => {}
       callback(ctx)
       return () => {}
     },
@@ -193,7 +199,7 @@ describe('Tencent provider wiring', () => {
 
   it('serves the signed tt-switch catalog as the list the machine starts out with', async () => {
     const { ctx } = providerContext()
-    state.fetchTtSwitchCatalog.mockResolvedValue({
+    state.fetchTtSwitchCatalog.mockResolvedValue({ ok: true, catalog: {
       models: [
         { id: 'tt-one', name: 'TT One', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] },
         { id: 'tt-two', name: 'TT Two', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] },
@@ -203,7 +209,7 @@ describe('Tencent provider wiring', () => {
       managedModelIds: ['tt-one', 'tt-two'],
       modelFallbacks: { 'tt-old': 'tt-two' },
       signatureVerified: undefined,
-    })
+    } })
 
     apply(ctx, {})
 
@@ -219,14 +225,14 @@ describe('Tencent provider wiring', () => {
 
   it('lets a configured model list outrank the signed tt-switch catalog', async () => {
     const { ctx } = providerContext()
-    state.fetchTtSwitchCatalog.mockResolvedValue({
+    state.fetchTtSwitchCatalog.mockResolvedValue({ ok: true, catalog: {
       models: [{ id: 'tt-one', name: 'TT One', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] }],
       revision: 8,
       updatedAt: '2026-10-07T13:31:40.820Z',
       managedModelIds: [],
       modelFallbacks: {},
       signatureVerified: undefined,
-    })
+    } })
 
     apply(ctx, { models: [{ id: 'gateway-extra', name: 'Gateway Extra' }] })
 
@@ -239,14 +245,14 @@ describe('Tencent provider wiring', () => {
 
   it('reports the tt-switch revision and deployment maps without filtering by them', async () => {
     const { ctx, info } = providerContext()
-    state.fetchTtSwitchCatalog.mockResolvedValue({
+    state.fetchTtSwitchCatalog.mockResolvedValue({ ok: true, catalog: {
       models: [{ id: 'tt-retired', name: 'TT Retired', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] }],
       revision: 8,
       updatedAt: '2026-10-07T13:31:40.820Z',
       managedModelIds: ['tt-one'],
       modelFallbacks: { 'tt-retired': 'tt-current' },
       signatureVerified: undefined,
-    })
+    } })
 
     apply(ctx, {})
 

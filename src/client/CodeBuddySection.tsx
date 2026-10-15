@@ -33,6 +33,19 @@ export type CodeBuddySettingsWrite =
   | { readonly kind: 'written'; readonly view: SettingsNamespaceView }
   | { readonly kind: 'refused'; readonly error: string }
 
+/** Where the catalog this route serves came from, as the Host reports it. */
+export interface CatalogStatusView {
+  readonly source?: 'tt-switch' | 'configured' | 'shipped' | 'failed' | 'pending'
+  readonly models?: number
+  readonly revision?: number
+  readonly updatedAt?: string
+  readonly managed?: number
+  readonly fallbacks?: number
+  readonly signature?: 'verified' | 'unchecked'
+  readonly readAt?: number
+  readonly error?: string
+}
+
 /** Host operations supplied by the registration. */
 export interface CodeBuddySettingsInjected {
   readonly describeCredential: (ref: string) => Promise<CredentialInfo | undefined>
@@ -42,11 +55,24 @@ export interface CodeBuddySettingsInjected {
     ops: SettingsPathOpView[],
     expectedRevision: number | undefined,
   ) => Promise<CodeBuddySettingsWrite>
+  readonly describeCatalog: () => Promise<CatalogStatusView | undefined>
+  readonly syncCatalog: () => Promise<CatalogStatusView | undefined>
 }
 
 export type CodeBuddySettingsProps = PropsRuntime<'settings.section'>
   & PropsLocale<'settings.codebuddy'>
   & InjectFace<CodeBuddySettingsInjected>
+
+/**
+ * Fill `{name}` placeholders. The Host translator may not interpolate, so the
+ * page does its own substitution over whatever string it was handed.
+ * @param text - translated copy.
+ * @param values - placeholder values.
+ * @returns the copy with every placeholder replaced.
+ */
+function fill(text: string, values: Readonly<Record<string, string>>): string {
+  return text.replace(/\{(\w+)\}/g, (whole, key: string) => values[key] ?? whole)
+}
 
 function modelsOp(overridden: boolean, models: readonly ModelDraft[]): SettingsPathOpView {
   if (!overridden) return { op: 'unset', path: ['models'] }
@@ -63,7 +89,9 @@ function modelsOp(overridden: boolean, models: readonly ModelDraft[]): SettingsP
  * @returns the section.
  */
 export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
-  const { t, describeCredential, storeCredential, describeSettings, writeSettings } = props
+  const {
+    t, describeCredential, storeCredential, describeSettings, writeSettings, describeCatalog, syncCatalog,
+  } = props
   const [keyDraft, setKeyDraft] = useState('')
   const [keyState, setKeyState] = useState<CredentialInfo | undefined>(undefined)
   const [namespace, setNamespace] = useState<SettingsNamespaceView | undefined>(undefined)
@@ -78,6 +106,26 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   const [saved, setSaved] = useState(false)
+  const [catalogStatus, setCatalogStatus] = useState<CatalogStatusView | undefined>(undefined)
+  const [syncing, setSyncing] = useState(false)
+
+  useEffect(() => {
+    let stale = false
+    void describeCatalog().then((status) => { if (!stale) setCatalogStatus(status) })
+    return () => { stale = true }
+  }, [describeCatalog])
+
+  const syncModels = async (): Promise<void> => {
+    setSyncing(true)
+    setFailure(undefined)
+    try {
+      setCatalogStatus(await syncCatalog())
+    } catch (error) {
+      setFailure(String((error as Error)?.message ?? error))
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   useEffect(() => {
     let stale = false
@@ -122,6 +170,25 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
   const canSaveKey = !keyLocked && keyFailure === undefined && keyDraft.trim().length > 0
   const canSaveModels = settingsWritable && modelsDirty && modelFailure === undefined
   const catalogDisabled = busy || !settingsWritable
+  const catalogOrigin = ((): string | undefined => {
+    const status = catalogStatus
+    if (status === undefined) return undefined
+    const models = String(status.models ?? 0)
+    const body = status.source === 'tt-switch'
+      ? status.revision === undefined
+        ? fill(t('catalogFromReleaseUndated'), { models })
+        : fill(t('catalogFromRelease'), { revision: String(status.revision), models })
+      : status.source === 'configured'
+        ? fill(t('catalogFromConfigured'), { models })
+        : status.source === 'shipped'
+          ? fill(t('catalogFromShipped'), { models })
+          : status.source === 'pending' ? t('catalogPending') : t('catalogFailed')
+    const signature = status.source === 'tt-switch' && status.signature === 'unchecked'
+      ? ` ${t('catalogSignatureUnchecked')}`
+      : ''
+    const error = status.error === undefined ? '' : ` ${status.error}`
+    return `${body}${signature}${error}`
+  })()
 
   const save = async (): Promise<void> => {
     const value = keyDraft.trim()
@@ -205,6 +272,9 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
         />
       </label>
       <p className={styles['status']} role="status">{status}</p>
+      {catalogOrigin === undefined
+        ? null
+        : <p className={styles['status']} role="status">{catalogOrigin}</p>}
       {catalog}
       {shownFailure === undefined
         ? null
@@ -218,6 +288,13 @@ export function CodeBuddySection(props: CodeBuddySettingsProps): ReactNode {
           onClick={() => { void save() }}
         >
           {t('apply')}
+        </button>
+        <button
+          type="button"
+          disabled={syncing}
+          onClick={() => { void syncModels() }}
+        >
+          {syncing ? t('syncingModels') : t('syncModels')}
         </button>
       </div>
     </section>

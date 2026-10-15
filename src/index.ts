@@ -53,6 +53,8 @@ export const TENCENT_CODEBUDDY_MODEL = 'hy3-ioa'
 export const TENCENT_CODEBUDDY_API_KEY = 'TENCENT_CODEBUDDY_API_KEY'
 
 const NS = 'llm-tencent-codebuddy'
+/** HTTP prefix the Settings page reads and re-triggers the catalog through. */
+const CATALOG_ROUTE_PREFIX = '/llm-tencent-codebuddy'
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /** Provider configuration. Endpoint, protocol, headers, and catalog stay package-owned. */
@@ -153,6 +155,32 @@ function snapshotOf(config: Config): Config {
 }
 
 /**
+ * What this route is serving and where it came from. Reported to the Settings
+ * page so a machine whose read failed says so instead of silently answering
+ * with the shipped list.
+ */
+export interface CatalogStatus {
+  /** Which source answered: the release file, the fallback, or nothing yet. */
+  source: 'tt-switch' | 'configured' | 'shipped' | 'failed' | 'pending'
+  /** Models currently registered. */
+  models: number
+  /** Catalogue revision, when the payload named one. */
+  revision?: number
+  /** Catalogue build time, when the payload named one. */
+  updatedAt?: string
+  /** Entries in the deployment's managed whitelist. Never filters. */
+  managed?: number
+  /** Retired-id mappings. Never rewrites. */
+  fallbacks?: number
+  /** `verified` only when a configured key matched the signature. */
+  signature?: 'verified' | 'unchecked'
+  /** When the catalogue was last read successfully. */
+  readAt?: number
+  /** Why the last read produced nothing. */
+  error?: string
+}
+
+/**
  * Choose the catalog this route serves.
  *
  * A list the user edited by hand wins: it is the only source that carries an
@@ -228,36 +256,69 @@ export function apply(ctx: Context, config: Config): void {
   let ttSwitchAt = 0
   let ttSwitchPending = false
   let ttSwitchAnnounced: string | undefined
+  /** What the last read produced, reported to the Settings page and the log. */
+  let ttSwitchStatus: CatalogStatus = { source: 'pending', models: 0 }
   let announced: readonly PiAiModelProfile[] | undefined
-  const refreshTtSwitch = async (): Promise<void> => {
-    if (ttSwitchPending || Date.now() - ttSwitchAt < TT_SWITCH_REFRESH_MS) return
+  // The adapter is handed `profiles`, but the registry snapshots what it was
+  // told at registration, so a catalog that lands after startup has to be
+  // pushed back into it or the machine keeps showing the shipped list.
+  let reregister: (() => void) | undefined
+  const refreshTtSwitch = async (force = false): Promise<CatalogStatus> => {
+    if (!force && (ttSwitchPending || Date.now() - ttSwitchAt < TT_SWITCH_REFRESH_MS)) return ttSwitchStatus
     ttSwitchPending = true
     try {
-      const catalog = await fetchTtSwitchCatalog({ key: snapshotOf(current()).catalogSignatureKey ?? '' })
-      if (catalog === undefined) return
+      const read = await fetchTtSwitchCatalog({ key: snapshotOf(current()).catalogSignatureKey ?? '' })
+      if (!read.ok) {
+        ttSwitchStatus = { source: 'failed', models: ttSwitch?.length ?? 0, error: read.reason }
+        // One line per distinct failure: a machine with no route to the release
+        // file otherwise looks identical to one that never asked.
+        if (ttSwitchAnnounced !== read.reason) {
+          ttSwitchAnnounced = read.reason
+          ctx.logger.info(`llm-tencent-codebuddy: tt-switch catalog unavailable — ${read.reason}`)
+        }
+        return ttSwitchStatus
+      }
+      const catalog = read.catalog
       ttSwitch = catalog.models
+      ttSwitchStatus = {
+        source: 'tt-switch',
+        models: catalog.models.length,
+        revision: catalog.revision,
+        updatedAt: catalog.updatedAt,
+        managed: catalog.managedModelIds.length,
+        fallbacks: Object.keys(catalog.modelFallbacks).length,
+        signature: catalog.signatureVerified === undefined ? 'unchecked' : 'verified',
+        readAt: Date.now(),
+      }
       // Diagnostics only. A curated whitelist and a retirement map are the
       // deployment's to apply: this route serves whatever id the gateway still
       // answers, so it reports them and never filters or rewrites by them.
       const facts = `revision ${String(catalog.revision ?? '?')} (${String(catalog.updatedAt ?? 'undated')})`
         + `, ${String(catalog.models.length)} models, ${String(catalog.managedModelIds.length)} managed`
         + `, ${String(Object.keys(catalog.modelFallbacks).length)} fallbacks`
-      const signature = catalog.signatureVerified === undefined
+      const signatureText = catalog.signatureVerified === undefined
         ? 'unchecked: no catalogSignatureKey configured'
         : 'verified'
-      const line = `llm-tencent-codebuddy: tt-switch catalog ${facts}, signature ${signature}`
+      const line = `llm-tencent-codebuddy: tt-switch catalog ${facts}, signature ${signatureText}`
       // One line per read: the revision is the only thing that changes between
       // two pulls of an unchanged file, and it changes rarely.
       if (line !== ttSwitchAnnounced) {
         ttSwitchAnnounced = line
         ctx.logger.info(line)
       }
-    } catch {
-      // A failed read keeps the previous list.
+      cached = undefined
+      reregister?.()
+    } catch (error) {
+      ttSwitchStatus = {
+        source: 'failed',
+        models: ttSwitch?.length ?? 0,
+        error: String((error as Error)?.message ?? error),
+      }
     } finally {
       ttSwitchAt = Date.now()
       ttSwitchPending = false
     }
+    return ttSwitchStatus
   }
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     void refreshTtSwitch()
@@ -268,6 +329,14 @@ export function apply(ctx: Context, config: Config): void {
       const source = models === TENCENT_CODEBUDDY_MODELS
         ? 'the shipped catalog'
         : models === ttSwitch ? 'the signed tt-switch release' : 'the configured list'
+      // Keep the reported source honest: a hand-edited list outranks the read.
+      if (ttSwitchStatus.source === 'tt-switch' || ttSwitchStatus.source === 'failed'
+        || ttSwitchStatus.source === 'pending') {
+        const reported: CatalogStatus['source'] = models === TENCENT_CODEBUDDY_MODELS
+          ? 'shipped'
+          : models === ttSwitch ? 'tt-switch' : 'configured'
+        ttSwitchStatus = { ...ttSwitchStatus, source: reported, models: models.length }
+      }
       ctx.logger.info(`llm-tencent-codebuddy: ${String(models.length)} models from ${source}`)
     }
     const key = [
@@ -324,6 +393,38 @@ export function apply(ctx: Context, config: Config): void {
     registration.replace([TENCENT_CODEBUDDY_PROVIDER])
     registeredPolicy = next
   }
+  reregister = (): void => {
+    registration.replace([TENCENT_CODEBUDDY_PROVIDER])
+    registeredPolicy = profiles().get(TENCENT_CODEBUDDY_PROVIDER)?.retryPolicy
+  }
+  // The Settings page needs to show where the catalog came from and to offer a
+  // re-read on demand: without it a machine with no route to the release file
+  // looks exactly like one that never asked. The Web carrier is optional, so a
+  // headless composition simply never serves the endpoint.
+  ctx.effect(() => ctx.inject(['webServer'], (webCtx) => {
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'prefix',
+      path: CATALOG_ROUTE_PREFIX,
+      handler: async (req: { method?: string; url?: string }, res: {
+        writeHead(status: number, headers: Record<string, string>): void
+        end(body?: string): void
+      }) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const path = url.pathname.slice(CATALOG_ROUTE_PREFIX.length).replace(/\/+$/, '') || '/'
+        const send = (status: number, body: unknown): void => {
+          res.writeHead(status, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(body))
+        }
+        if (req.method === 'GET' && path === '/api/catalog') {
+          return send(200, { ...ttSwitchStatus, served: profiles().get(TENCENT_CODEBUDDY_PROVIDER) !== undefined })
+        }
+        if (req.method === 'POST' && path === '/api/catalog/sync') {
+          return send(200, await refreshTtSwitch(true))
+        }
+        return send(404, { error: 'not found' })
+      },
+    }))
+  }).dispose)
   ctx.inject(['settings'], (settingsCtx) => {
     const settings = settingsCtx.settings as SettingsSeam
     // ≤ 0.1.6: the Host needs an explicit section and pushes config changes

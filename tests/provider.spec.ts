@@ -9,7 +9,7 @@ import { TENCENT_CODEBUDDY_MODELS } from '../src/catalog.ts'
 // the pre-tt-switch behaviour: the fixed catalog answers.
 vi.mock('../src/tt-switch-catalog.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/tt-switch-catalog.ts')>(),
-  fetchTtSwitchCatalog: async () => undefined,
+  fetchTtSwitchCatalog: async () => ({ ok: false, reason: 'mocked: no network in tests' }),
 }))
 
 const contexts: Context[] = []

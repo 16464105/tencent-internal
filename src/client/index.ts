@@ -9,12 +9,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  CodeBuddySection, CODEBUDDY_SETTINGS_NS, type CodeBuddySettingsInjected,
+  CodeBuddySection, CODEBUDDY_SETTINGS_NS,
+  type CatalogStatusView, type CodeBuddySettingsInjected,
 } from './CodeBuddySection.tsx'
 import { en, zh, type CodeBuddySettingsKey } from './locales.ts'
 
 export type {
-  CodeBuddySettingsInjected, CodeBuddySettingsProps, CodeBuddySettingsSnapshot, CodeBuddySettingsWrite,
+  CatalogStatusView, CodeBuddySettingsInjected, CodeBuddySettingsProps,
+  CodeBuddySettingsSnapshot, CodeBuddySettingsWrite,
 } from './CodeBuddySection.tsx'
 export { CODEBUDDY_API_KEY_REF, CODEBUDDY_SETTINGS_NS } from './CodeBuddySection.tsx'
 
@@ -26,6 +28,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 const NS = 'settings.codebuddy'
+/** Catalog endpoint the Host side of this package serves. */
+const CATALOG_API = '/llm-tencent-codebuddy/api/catalog'
 
 /**
  * Required services before the section can register.
@@ -61,6 +65,26 @@ export function apply(ctx: ClientContext): void {
       const response = await ctx.remote.settings.mutate(CODEBUDDY_SETTINGS_NS, ops, expectedRevision)
       if (response.ok) return { kind: 'written', view: response.value }
       return { kind: 'refused', error: response.error.message }
+    },
+    // The catalog lives in the Host plugin, not in the settings namespace: the
+    // settings view only ever shows the schema default. These two read and
+    // re-trigger the actual source, straight from the Host's own endpoint.
+    describeCatalog: async () => {
+      try {
+        const response = await fetch(CATALOG_API, { headers: { accept: 'application/json' } })
+        return response.ok ? await response.json() as CatalogStatusView : undefined
+      } catch {
+        return undefined
+      }
+    },
+    syncCatalog: async () => {
+      const response = await fetch(`${CATALOG_API}/sync`, {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+      })
+      const body = await response.json().catch(() => ({})) as CatalogStatusView & { error?: string }
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${String(response.status)}`)
+      return body
     },
   })
   ctx.slots.inject('settings.section', () => ctx.slots.register({

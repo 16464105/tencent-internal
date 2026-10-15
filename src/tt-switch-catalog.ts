@@ -30,8 +30,8 @@
  * the Base64 payload text — the only input both sides hold verbatim.
  *
  * Read failures never throw: an unreachable host, an unrecognized envelope, a
- * bad signature or an empty list yields `undefined`, and the caller keeps its
- * previous catalog.
+ * bad signature or an empty list yields `{ ok: false }` with the reason, and
+ * the caller keeps its previous catalog.
  *
  * @module dsh-llm-tencent-codebuddy/tt-switch-catalog
  */
@@ -239,24 +239,41 @@ export function projectTtSwitchCatalog(body: unknown, key = ''): TtSwitchCatalog
   }
 }
 
+/** Outcome of one read: the catalogue, or why there is none. */
+export type TtSwitchRead =
+  | { readonly ok: true; readonly catalog: TtSwitchCatalog }
+  | { readonly ok: false; readonly reason: string }
+
 /**
  * Read the signed catalogue.
  * @param options.key - HMAC key; empty leaves the signature unchecked.
  * @param options.fetchImpl - fetch implementation, injectable for tests.
- * @returns the projected catalogue, or undefined when the read yielded none.
+ * @returns the projected catalogue, or why the read yielded none. Never throws;
+ * the reason travels with the result so the caller can report it instead of
+ * silently serving a stale list.
  */
 export async function fetchTtSwitchCatalog(
   options: { readonly key?: string; readonly fetchImpl?: typeof fetch } = {},
-): Promise<TtSwitchCatalog | undefined> {
+): Promise<TtSwitchRead> {
+  let response: Response
   try {
-    const response = await (options.fetchImpl ?? fetch)(TT_SWITCH_CATALOG_URL, {
+    response = await (options.fetchImpl ?? fetch)(TT_SWITCH_CATALOG_URL, {
       method: 'GET',
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(TT_SWITCH_TIMEOUT_MS),
     })
-    if (!response.ok) return undefined
-    return projectTtSwitchCatalog(await response.json(), options.key ?? '')
-  } catch {
-    return undefined
+  } catch (error) {
+    return { ok: false, reason: `${TT_SWITCH_CATALOG_URL} unreachable: ${String((error as Error)?.message ?? error)}` }
   }
+  if (!response.ok) return { ok: false, reason: `${TT_SWITCH_CATALOG_URL} answered HTTP ${String(response.status)}` }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    return { ok: false, reason: `${TT_SWITCH_CATALOG_URL} did not answer with JSON` }
+  }
+  const catalog = projectTtSwitchCatalog(body, options.key ?? '')
+  // Empty, malformed, or carrying a signature the configured key does not match.
+  if (catalog === undefined) return { ok: false, reason: `${TT_SWITCH_CATALOG_URL} carried no usable catalog` }
+  return { ok: true, catalog }
 }
