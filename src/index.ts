@@ -20,22 +20,22 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import {
   PiAiAdapter,
+  authContextFrom,
+  credentialStoreFrom,
+  resolveProfiles,
   type PiAiModelProfile,
   type ResolvedPiAiProviderProfile,
 } from '@deepseek-ai/dsh-llm-pi-ai'
-// The harness pi-ai plugin keeps its auth factories and profile resolver on
-// their own modules; only the adapter and its option types are package-root
-// exports, so this adapter imports the submodules directly.
-import { authContextFrom, credentialStoreFrom } from '@deepseek-ai/dsh-llm-pi-ai/src/auth.ts'
-import { resolveProfiles } from '@deepseek-ai/dsh-llm-pi-ai/src/config.ts'
+// The harness pi-ai plugin exports its auth factories and profile resolver from
+// the package root. Reaching into `@deepseek-ai/dsh-llm-pi-ai/src/*.ts` only
+// works inside the originating monorepo: a packaged Harness ships `lib/` alone,
+// so those subpath imports fail to resolve in an installed app.
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { TENCENT_CODEBUDDY_MODELS } from './catalog.ts'
-import {
-  normalizeTencentPayload,
-  TENCENT_CODEBUDDY_BASE_URL,
-  tencentRequestHeaders,
-} from './tencent-request.ts'
+import { readLocalCatalog } from './local-catalog.ts'
+import { ROUTE_HEADERS, TENCENT_CODEBUDDY_BASE_URL } from './tencent-request.ts'
+import { fetchUpstreamCatalog, TENCENT_CODEBUDDY_REFRESH_MS } from './upstream-catalog.ts'
 
 export const name = 'llm-tencent-codebuddy'
 export const inject = ['llm']
@@ -134,8 +134,28 @@ function snapshotOf(config: Config): Config {
   }
 }
 
+/**
+ * The catalog this route serves. An explicit configured list wins outright; a
+ * configuration that still carries the shipped default is served the
+ * deployment's own list — upstream `/v3/config` when this machine holds a
+ * credential for it, else the local CodeBuddy client's cache, else the shipped
+ * projection — so a model the gateway starts serving needs no edit here, and a
+ * machine with neither source keeps a checked-in answer.
+ * @param configured - `models` from the current config snapshot.
+ * @param upstream - the last successful `/v3/config` read, when there is one.
+ * @returns the models to register.
+ */
+function effectiveCatalog(
+  configured: readonly PiAiModelProfile[] | undefined,
+  upstream: readonly PiAiModelProfile[] | undefined,
+): readonly PiAiModelProfile[] {
+  if (configured !== undefined && !deepEqualJson(configured, TENCENT_CODEBUDDY_MODELS)) return configured
+  return upstream ?? readLocalCatalog() ?? TENCENT_CODEBUDDY_MODELS
+}
+
 function profileFrom(
   config: Config,
+  models: readonly PiAiModelProfile[],
 ): ReadonlyMap<string, ResolvedPiAiProviderProfile> {
   return resolveProfiles({
     [TENCENT_CODEBUDDY_PROVIDER]: {
@@ -143,10 +163,13 @@ function profileFrom(
       displayName: 'Tencent CodeBuddy',
       api: 'openai-completions',
       baseURL: TENCENT_CODEBUDDY_BASE_URL,
-      // Schema-normalized configs always carry the materialized list (the
-      // fixed catalog or an explicit replacement); the fallback covers a raw
-      // programmatic config that bypassed the schema.
-      models: config.models ?? [...TENCENT_CODEBUDDY_MODELS],
+      models: [...models],
+      // The Harness sends a route's configured headers on every request; this
+      // is the only place this version carries the CodeBuddy fingerprint, the
+      // option an older adapter exposed for it having been removed. The
+      // per-request ids the CLI also sends cannot be expressed here and the
+      // gateway serves requests without them.
+      headers: { ...ROUTE_HEADERS },
       ...config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs },
       streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
       ...config.retryPolicy === undefined ? {} : { retryPolicy: config.retryPolicy },
@@ -183,15 +206,60 @@ export function apply(ctx: Context, config: Config): void {
     readonly profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>
   } | undefined
   let syncRegistration: (() => void) | undefined
+  let announced: readonly PiAiModelProfile[] | undefined
+  // Resolution is synchronous and a refresh may take seconds, so the upstream
+  // read runs in the background and the route keeps serving its last good list
+  // while one is in flight. A read starts when the cached one is older than
+  // TENCENT_CODEBUDDY_REFRESH_MS and a credential exists; without one the local
+  // client's cache answers instead.
+  let upstream: readonly PiAiModelProfile[] | undefined
+  let upstreamAt = 0
+  let upstreamPending = false
+  const refreshUpstream = async (): Promise<void> => {
+    if (upstreamPending || Date.now() - upstreamAt < TENCENT_CODEBUDDY_REFRESH_MS) return
+    upstreamPending = true
+    let attempted = false
+    try {
+      const ref = credentialRef(snapshotOf(current()).apiKeyEnv ?? TENCENT_CODEBUDDY_API_KEY)
+      const credentials = ctx.get('credentials')
+      const value = credentials === undefined
+        ? launchEnvironmentOf(ctx).get(ref)?.value
+        : (await credentials.resolve(ref))?.value
+      if (value === undefined || value.length === 0) return
+      attempted = true
+      // Upstream carries the ids; this machine's cache carries the per-model
+      // detail (credit multiplier, capabilities) the entries above it lack.
+      const known = new Map((readLocalCatalog() ?? []).map(model => [model.id, model]))
+      const models = await fetchUpstreamCatalog(value, known)
+      if (models !== undefined) upstream = models
+      // A refused or unreachable read keeps the previous list.
+    } catch {
+      // Idem: the route keeps serving what it already has.
+    } finally {
+      // Only a gateway request starts the cooldown; no credential must not
+      // delay discovery after the user saves a key.
+      if (attempted) upstreamAt = Date.now()
+      upstreamPending = false
+    }
+  }
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
+    void refreshUpstream()
     const snapshot = snapshotOf(current())
+    const models = effectiveCatalog(snapshot.models, upstream)
+    if (models !== announced) {
+      announced = models
+      const source = models === TENCENT_CODEBUDDY_MODELS
+        ? 'the shipped catalog'
+        : models === upstream ? 'upstream /v3/config' : 'the local CodeBuddy client'
+      ctx.logger.info(`llm-tencent-codebuddy: ${String(models.length)} models from ${source}`)
+    }
     const key = [
-      snapshot.apiKeyEnv, snapshot.models, snapshot.timeoutMs,
+      snapshot.apiKeyEnv, models, snapshot.timeoutMs,
       snapshot.streamIdleTimeoutMs, snapshot.retryPolicy,
     ]
     const hit = cached
     if (hit !== undefined && hit.key.every((value, index) => value === key[index])) return hit.profiles
-    const next = profileFrom(snapshot)
+    const next = profileFrom(snapshot, models)
     cached = { key, profiles: next }
     // A volatile edit lands without restarting the plugin, so the registration
     // facts are refreshed whenever the resolved snapshot moved.
@@ -224,10 +292,6 @@ export function apply(ctx: Context, config: Config): void {
     resolveApiKey,
     auth: { credentials: credentialStoreFrom(ctx), authContext: authContextFrom(ctx) },
     resolveAttachments: () => ctx.get('attachments'),
-    prepareRequest: ({ options }) => ({
-      headers: tencentRequestHeaders(options),
-      onPayload: normalizeTencentPayload,
-    }),
   })
   // The Settings → CodeBuddy page owns the key and catalog; this route is not
   // a Models card. Out-of-tree installs cannot curate `ui-settings-models`.

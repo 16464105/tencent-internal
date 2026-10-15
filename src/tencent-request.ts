@@ -10,8 +10,12 @@ export const TENCENT_CODEBUDDY_BASE_URL = 'https://copilot.tencent.com/v2'
 const MIN_MAX_TOKENS = 100
 
 /** Stable request headers required by the CodeBuddy CLI route. */
-const ROUTE_HEADERS: Readonly<Record<string, string>> = {
+export const ROUTE_HEADERS: Readonly<Record<string, string>> = {
   'user-agent': 'CLI/2.113.0 CodeBuddy/2.113.0 CLI/2.113.0 CodeBuddy/2.113.0',
+  // The gateway fingerprints the official CLI (see dsh-router-codebuddy's cn
+  // profile): these two are what its own transport sends besides the ids below.
+  'x-product': 'SaaS',
+  'x-requested-with': 'XMLHttpRequest',
   'x-codebuddy-request': '1',
   'x-agent-intent': 'craft',
   'x-agent-purpose': 'conversation',
