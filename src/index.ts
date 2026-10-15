@@ -36,6 +36,7 @@ import { TENCENT_CODEBUDDY_MODELS } from './catalog.ts'
 import { readLocalCatalog } from './local-catalog.ts'
 import { ROUTE_HEADERS, TENCENT_CODEBUDDY_BASE_URL } from './tencent-request.ts'
 import { fetchUpstreamCatalog, TENCENT_CODEBUDDY_REFRESH_MS } from './upstream-catalog.ts'
+import { fetchTtSwitchCatalog, TT_SWITCH_REFRESH_MS } from './tt-switch-catalog.ts'
 
 export const name = 'llm-tencent-codebuddy'
 export const inject = ['llm']
@@ -66,6 +67,13 @@ export interface Config {
   streamIdleTimeoutMs?: number
   /** Provider-owned model-request retry policy. */
   retryPolicy?: RetryPolicyConfig
+  /**
+   * HMAC key for the signed tt-switch catalogue. Empty — the default — leaves
+   * the signature unchecked and the route says so on every read; set it in the
+   * Cordis row config (not on the Settings page) to reject a list whose
+   * signature does not match.
+   */
+  catalogSignatureKey?: string
 }
 
 /** The reasoning-effort dict schema, mirroring pi-ai's own profile schema. */
@@ -100,6 +108,10 @@ export const Config: z<Config> = z.object({
   // the whole directory, an explicit empty list clears it (same contract as
   // the direct DeepSeek adapter's advisory catalog), and a list replaces it.
   models: z.array(modelProfile).default([...TENCENT_CODEBUDDY_MODELS]).volatile(),
+  // Not volatile, so the forms API never surfaces it: a signing key is not a
+  // field the Settings page should carry, and leaving it out of the described
+  // namespace keeps the page's own two fields intact.
+  catalogSignatureKey: z.string().default(''),
   timeoutMs: z.natural(),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS)
     .default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
@@ -128,6 +140,7 @@ function snapshotOf(config: Config): Config {
   return {
     apiKeyEnv: valueOf(config.apiKeyEnv),
     models: valueOf(config.models),
+    catalogSignatureKey: valueOf(config.catalogSignatureKey),
     timeoutMs: valueOf(config.timeoutMs),
     streamIdleTimeoutMs: valueOf(config.streamIdleTimeoutMs),
     retryPolicy: valueOf(config.retryPolicy),
@@ -135,22 +148,26 @@ function snapshotOf(config: Config): Config {
 }
 
 /**
- * The catalog this route serves. An explicit configured list wins outright; a
- * configuration that still carries the shipped default is served the
- * deployment's own list — upstream `/v3/config` when this machine holds a
- * credential for it, else the local CodeBuddy client's cache, else the shipped
- * projection — so a model the gateway starts serving needs no edit here, and a
- * machine with neither source keeps a checked-in answer.
+ * The catalog this route serves. An explicit configured list wins outright — a
+ * catalog the user edited always outranks anything this package discovers.
+ * Otherwise the machine's own list answers, in the order the sources can be
+ * trusted to be current: the signed tt-switch release, which needs nothing from
+ * this machine and is therefore what the machine starts out with; upstream
+ * `/v3/config`, which only carries models once a credential is stored; the
+ * local CodeBuddy client's cache; and last the shipped projection, so a machine
+ * with none of them still has a checked-in answer.
  * @param configured - `models` from the current config snapshot.
+ * @param ttSwitch - the last successful signed read, when there is one.
  * @param upstream - the last successful `/v3/config` read, when there is one.
  * @returns the models to register.
  */
 function effectiveCatalog(
   configured: readonly PiAiModelProfile[] | undefined,
+  ttSwitch: readonly PiAiModelProfile[] | undefined,
   upstream: readonly PiAiModelProfile[] | undefined,
 ): readonly PiAiModelProfile[] {
   if (configured !== undefined && !deepEqualJson(configured, TENCENT_CODEBUDDY_MODELS)) return configured
-  return upstream ?? readLocalCatalog() ?? TENCENT_CODEBUDDY_MODELS
+  return ttSwitch ?? upstream ?? readLocalCatalog() ?? TENCENT_CODEBUDDY_MODELS
 }
 
 function profileFrom(
@@ -212,6 +229,44 @@ export function apply(ctx: Context, config: Config): void {
   // while one is in flight. A read starts when the cached one is older than
   // TENCENT_CODEBUDDY_REFRESH_MS and a credential exists; without one the local
   // client's cache answers instead.
+  // The signed tt-switch release asks nothing of this machine — no credential,
+  // no desktop client — so it is the list the machine starts out with. It
+  // refreshes on its own cooldown, in the background, and the route keeps
+  // serving the last good read while one is in flight.
+  let ttSwitch: readonly PiAiModelProfile[] | undefined
+  let ttSwitchAt = 0
+  let ttSwitchPending = false
+  let ttSwitchAnnounced: string | undefined
+  const refreshTtSwitch = async (): Promise<void> => {
+    if (ttSwitchPending || Date.now() - ttSwitchAt < TT_SWITCH_REFRESH_MS) return
+    ttSwitchPending = true
+    try {
+      const catalog = await fetchTtSwitchCatalog({ key: snapshotOf(current()).catalogSignatureKey ?? '' })
+      if (catalog === undefined) return
+      ttSwitch = catalog.models
+      // Diagnostics only. A curated whitelist and a retirement map are the
+      // deployment's to apply: this route serves whatever id the gateway still
+      // answers, so it reports them and never filters or rewrites by them.
+      const facts = `revision ${String(catalog.revision ?? '?')} (${String(catalog.updatedAt ?? 'undated')})`
+        + `, ${String(catalog.models.length)} models, ${String(catalog.managedModelIds.length)} managed`
+        + `, ${String(Object.keys(catalog.modelFallbacks).length)} fallbacks`
+      const signature = catalog.signatureVerified === undefined
+        ? 'unchecked: no catalogSignatureKey configured'
+        : 'verified'
+      const line = `llm-tencent-codebuddy: tt-switch catalog ${facts}, signature ${signature}`
+      // One line per read: the revision is the only thing that changes between
+      // two pulls of an unchanged file, and it changes rarely.
+      if (line !== ttSwitchAnnounced) {
+        ttSwitchAnnounced = line
+        ctx.logger.info(line)
+      }
+    } catch {
+      // A failed read keeps the previous list.
+    } finally {
+      ttSwitchAt = Date.now()
+      ttSwitchPending = false
+    }
+  }
   let upstream: readonly PiAiModelProfile[] | undefined
   let upstreamAt = 0
   let upstreamPending = false
@@ -243,19 +298,22 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
+    void refreshTtSwitch()
     void refreshUpstream()
     const snapshot = snapshotOf(current())
-    const models = effectiveCatalog(snapshot.models, upstream)
+    const models = effectiveCatalog(snapshot.models, ttSwitch, upstream)
     if (models !== announced) {
       announced = models
       const source = models === TENCENT_CODEBUDDY_MODELS
         ? 'the shipped catalog'
-        : models === upstream ? 'upstream /v3/config' : 'the local CodeBuddy client'
+        : models === ttSwitch
+          ? 'the signed tt-switch release'
+          : models === upstream ? 'upstream /v3/config' : 'the local CodeBuddy client'
       ctx.logger.info(`llm-tencent-codebuddy: ${String(models.length)} models from ${source}`)
     }
     const key = [
       snapshot.apiKeyEnv, models, snapshot.timeoutMs,
-      snapshot.streamIdleTimeoutMs, snapshot.retryPolicy,
+      snapshot.streamIdleTimeoutMs, snapshot.retryPolicy, snapshot.catalogSignatureKey,
     ]
     const hit = cached
     if (hit !== undefined && hit.key.every((value, index) => value === key[index])) return hit.profiles

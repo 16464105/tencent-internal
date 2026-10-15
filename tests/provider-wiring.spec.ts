@@ -20,11 +20,19 @@ const state = vi.hoisted(() => ({
   services: new Map<string, unknown>(),
   settingsHooks: [] as SettingsHooks[],
   fetchUpstreamCatalog: vi.fn(),
+  fetchTtSwitchCatalog: vi.fn(),
 }))
 
 vi.mock('../src/upstream-catalog.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/upstream-catalog.ts')>(),
   fetchUpstreamCatalog: state.fetchUpstreamCatalog,
+}))
+
+// The tt-switch read is the machine's built-in catalog and would otherwise hit
+// the network the moment a profile is asked for, racing the assertions below.
+vi.mock('../src/tt-switch-catalog.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/tt-switch-catalog.ts')>(),
+  fetchTtSwitchCatalog: state.fetchTtSwitchCatalog,
 }))
 const settingsInstall = ((_owner: unknown, _ns: string, _schema: unknown, _config: unknown, hooks: SettingsHooks) => {
   state.settingsHooks.push(hooks)
@@ -95,6 +103,7 @@ beforeEach(() => {
   state.launchEnvironment.getFrom.mockReset()
   state.launchEnvironment.get.mockReset()
   state.fetchUpstreamCatalog.mockReset()
+  state.fetchTtSwitchCatalog.mockReset()
 })
 
 describe('Tencent provider wiring', () => {
@@ -193,6 +202,81 @@ describe('Tencent provider wiring', () => {
     const merged = profile(options)
     const piModels = merged.piProvider!.getModels()
     expect(piModels.map(model => model.id)).toEqual(['gateway-extra'])
+  })
+
+  it('serves the signed tt-switch catalog as the list the machine starts out with', async () => {
+    const { ctx } = providerContext()
+    state.fetchTtSwitchCatalog.mockResolvedValue({
+      models: [
+        { id: 'tt-one', name: 'TT One', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] },
+        { id: 'tt-two', name: 'TT Two', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] },
+      ],
+      revision: 8,
+      updatedAt: '2026-10-07T13:31:40.820Z',
+      managedModelIds: ['tt-one', 'tt-two'],
+      modelFallbacks: { 'tt-old': 'tt-two' },
+      signatureVerified: undefined,
+    })
+
+    apply(ctx, {})
+
+    const options = state.adapterOptions[0]
+    if (options === undefined) throw new Error('expected adapter options')
+    options.profiles()
+    // It needs no credential, so it is read on the first ask rather than waiting
+    // for a key the way /v3/config does.
+    await vi.waitFor(() => {
+      expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['tt-one', 'tt-two'])
+    })
+  })
+
+  it('lets a configured model list outrank the signed tt-switch catalog', async () => {
+    const { ctx } = providerContext()
+    state.fetchTtSwitchCatalog.mockResolvedValue({
+      models: [{ id: 'tt-one', name: 'TT One', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] }],
+      revision: 8,
+      updatedAt: '2026-10-07T13:31:40.820Z',
+      managedModelIds: [],
+      modelFallbacks: {},
+      signatureVerified: undefined,
+    })
+
+    apply(ctx, { models: [{ id: 'gateway-extra', name: 'Gateway Extra' }] })
+
+    const options = state.adapterOptions[0]
+    if (options === undefined) throw new Error('expected adapter options')
+    options.profiles()
+    await vi.waitFor(() => expect(state.fetchTtSwitchCatalog).toHaveBeenCalledTimes(1))
+    expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['gateway-extra'])
+  })
+
+  it('reports the tt-switch revision and deployment maps without filtering by them', async () => {
+    const { ctx, info } = providerContext()
+    state.fetchTtSwitchCatalog.mockResolvedValue({
+      models: [{ id: 'tt-retired', name: 'TT Retired', contextWindow: 200_000, maxTokens: 128_000, input: ['text'] }],
+      revision: 8,
+      updatedAt: '2026-10-07T13:31:40.820Z',
+      managedModelIds: ['tt-one'],
+      modelFallbacks: { 'tt-retired': 'tt-current' },
+      signatureVerified: undefined,
+    })
+
+    apply(ctx, {})
+
+    const options = state.adapterOptions[0]
+    if (options === undefined) throw new Error('expected adapter options')
+    options.profiles()
+    await vi.waitFor(() => {
+      expect(info).toHaveBeenCalledWith(expect.stringContaining(
+        'tt-switch catalog revision 8 (2026-10-07T13:31:40.820Z), 1 models, 1 managed, 1 fallbacks',
+      ))
+    })
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('signature unchecked: no catalogSignatureKey configured'),
+    )
+    // Not managed and retired, and still served as-is: whitelisting and
+    // rewriting are the deployment's to apply, not this route's.
+    expect(profile(options).piProvider!.getModels().map(model => model.id)).toEqual(['tt-retired'])
   })
 
   it('registers through the Host Config projection once installSection is gone', () => {

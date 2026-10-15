@@ -53,6 +53,24 @@ Do not add this bundle to a profile that already inserts `llm-tencent-codebuddy`
 
 Official DeepSeek stays mounted. The endpoint, protocol, headers, and catalog stay package-owned; callers cannot redirect the trusted key to another endpoint through settings.
 
+## Model catalog
+
+With no `models` configured, the route serves the first source that answers, in this order:
+
+| Order | Source | Needs |
+|---|---|---|
+| 1 | `models` from the Cordis row (Settings → CodeBuddy) | — |
+| 2 | The signed tt-switch release (`releases/tencent_models.json`) | nothing from this machine |
+| 3 | Upstream `/v3/config` | a stored credential |
+| 4 | The local CodeBuddy desktop client's cache | the desktop client |
+| 5 | The catalog checked into this package | — |
+
+The tt-switch release is the list the machine starts out with: it is the same file the tt-switch binary reads, it is signed (`HMAC-SHA256` over the Base64 payload), and it needs neither a key nor a desktop client. It refreshes in the background every 10 minutes; a failed read keeps the previous list.
+
+Set `catalogSignatureKey` on the Cordis row to check the signature. It is deliberately **not** volatile, so the Settings page never carries a signing key; with no key the read is trusted on the strength of HTTPS alone and the route says `signature unchecked` on every read. A key that does not match rejects the whole catalog.
+
+The release also carries `managedModelIds` and `modelFallbacks` (retired id → replacement). Both are reported for diagnostics only: this route serves whatever id the gateway still answers, so a curated whitelist and a silent rewrite are the deployment's to apply, not the plugin's.
+
 ## Configuration
 
 ```yaml
