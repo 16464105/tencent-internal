@@ -1,8 +1,16 @@
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import * as TencentCodeBuddy from '../src/index.ts'
 import { TENCENT_CODEBUDDY_MODELS } from '../src/catalog.ts'
+
+// The signed release needs no credential, so `apply()` would otherwise race a
+// real network read against these assertions. A read that yields nothing is
+// the pre-tt-switch behaviour: the fixed catalog answers.
+vi.mock('../src/tt-switch-catalog.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/tt-switch-catalog.ts')>(),
+  fetchTtSwitchCatalog: async () => undefined,
+}))
 
 const contexts: Context[] = []
 

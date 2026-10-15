@@ -2,8 +2,12 @@
  * Tencent CodeBuddy provider for the Harness LLM seam. The package owns one
  * fixed route, `tencent-internal`, with a fixed OpenAI Chat Completions
  * endpoint, the request normalization observed from the CodeBuddy client, and
- * a package-owned fixed model catalog. Configuration layers a `models` list
- * over that catalog; the Settings → CodeBuddy page stores the key and the catalog override.
+ * a package-owned fixed model catalog. With no `models` configured, the route
+ * serves the signed tt-switch catalogue — the same release file the tt-switch
+ * binary reads, which needs nothing from this machine and is therefore the list
+ * the machine starts out with — and falls back to the checked-in catalog when
+ * that read yields nothing. Configuration layers a `models` list over either;
+ * the Settings → CodeBuddy page stores the key and the catalog override.
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
@@ -31,6 +35,7 @@ import { resolveProfiles } from '@deepseek-ai/dsh-llm-pi-ai/src/config.ts'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { TENCENT_CODEBUDDY_MODELS } from './catalog.ts'
+import { fetchTtSwitchCatalog, TT_SWITCH_REFRESH_MS } from './tt-switch-catalog.ts'
 import {
   normalizeTencentPayload,
   TENCENT_CODEBUDDY_BASE_URL,
@@ -55,11 +60,19 @@ export interface Config {
   /** Credential reference resolved per request. */
   apiKeyEnv?: string
   /**
-   * Model catalog served by this route. Omission serves the package's fixed
-   * catalog unchanged; an explicit list replaces it. Catalog edits stay in
-   * `settings.yaml` or Cordis config; the Settings page stores the key and the catalog.
+   * Model catalog served by this route. Omission serves the signed tt-switch
+   * catalogue, or the package's fixed catalog when that read yields nothing;
+   * an explicit list replaces it. Catalog edits stay in `settings.yaml` or
+   * Cordis config; the Settings page stores the key and the catalog.
    */
   models?: PiAiModelProfile[]
+  /**
+   * HMAC key for the signed tt-switch catalogue. Empty — the default — leaves
+   * the signature unchecked and the route says so on every read; set it in the
+   * Cordis row config (not on the Settings page) to reject a list whose
+   * signature does not match.
+   */
+  catalogSignatureKey?: string
   /** HTTP/provider SDK timeout in milliseconds. */
   timeoutMs?: number
   /** Maximum provider idle time while one stream read is outstanding. */
@@ -100,6 +113,10 @@ export const Config: z<Config> = z.object({
   // the whole directory, an explicit empty list clears it (same contract as
   // the direct DeepSeek adapter's advisory catalog), and a list replaces it.
   models: z.array(modelProfile).default([...TENCENT_CODEBUDDY_MODELS]).volatile(),
+  // Not volatile, so the forms API never surfaces it: a signing key is not a
+  // field the Settings page should carry, and leaving it out of the described
+  // namespace keeps the page's own two fields intact.
+  catalogSignatureKey: z.string().default(''),
   timeoutMs: z.natural(),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS)
     .default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
@@ -128,14 +145,37 @@ function snapshotOf(config: Config): Config {
   return {
     apiKeyEnv: valueOf(config.apiKeyEnv),
     models: valueOf(config.models),
+    catalogSignatureKey: valueOf(config.catalogSignatureKey),
     timeoutMs: valueOf(config.timeoutMs),
     streamIdleTimeoutMs: valueOf(config.streamIdleTimeoutMs),
     retryPolicy: valueOf(config.retryPolicy),
   }
 }
 
+/**
+ * Choose the catalog this route serves.
+ *
+ * A list the user edited by hand wins: it is the only source that carries an
+ * explicit decision about this machine. Beneath it sits the signed tt-switch
+ * release, which needs nothing from this machine — no credential, no desktop
+ * client — and is therefore the list the machine starts out with; beneath that,
+ * the catalog checked in here, so a machine the release file never reached
+ * still has an answer.
+ * @param configured - `models` from the current config snapshot.
+ * @param ttSwitch - the last successful signed read, when there is one.
+ * @returns the models to register.
+ */
+function effectiveCatalog(
+  configured: readonly PiAiModelProfile[] | undefined,
+  ttSwitch: readonly PiAiModelProfile[] | undefined,
+): readonly PiAiModelProfile[] {
+  if (configured !== undefined && !deepEqualJson(configured, TENCENT_CODEBUDDY_MODELS)) return configured
+  return ttSwitch ?? TENCENT_CODEBUDDY_MODELS
+}
+
 function profileFrom(
   config: Config,
+  models: readonly PiAiModelProfile[],
 ): ReadonlyMap<string, ResolvedPiAiProviderProfile> {
   return resolveProfiles({
     [TENCENT_CODEBUDDY_PROVIDER]: {
@@ -143,10 +183,7 @@ function profileFrom(
       displayName: 'Tencent CodeBuddy',
       api: 'openai-completions',
       baseURL: TENCENT_CODEBUDDY_BASE_URL,
-      // Schema-normalized configs always carry the materialized list (the
-      // fixed catalog or an explicit replacement); the fallback covers a raw
-      // programmatic config that bypassed the schema.
-      models: config.models ?? [...TENCENT_CODEBUDDY_MODELS],
+      models,
       ...config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs },
       streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
       ...config.retryPolicy === undefined ? {} : { retryPolicy: config.retryPolicy },
@@ -183,15 +220,63 @@ export function apply(ctx: Context, config: Config): void {
     readonly profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>
   } | undefined
   let syncRegistration: (() => void) | undefined
+  // The signed tt-switch release asks nothing of this machine — no credential,
+  // no desktop client — so it is the list the machine starts out with. It
+  // refreshes on its own cooldown, in the background, and the route keeps
+  // serving the last good read while one is in flight.
+  let ttSwitch: readonly PiAiModelProfile[] | undefined
+  let ttSwitchAt = 0
+  let ttSwitchPending = false
+  let ttSwitchAnnounced: string | undefined
+  let announced: readonly PiAiModelProfile[] | undefined
+  const refreshTtSwitch = async (): Promise<void> => {
+    if (ttSwitchPending || Date.now() - ttSwitchAt < TT_SWITCH_REFRESH_MS) return
+    ttSwitchPending = true
+    try {
+      const catalog = await fetchTtSwitchCatalog({ key: snapshotOf(current()).catalogSignatureKey ?? '' })
+      if (catalog === undefined) return
+      ttSwitch = catalog.models
+      // Diagnostics only. A curated whitelist and a retirement map are the
+      // deployment's to apply: this route serves whatever id the gateway still
+      // answers, so it reports them and never filters or rewrites by them.
+      const facts = `revision ${String(catalog.revision ?? '?')} (${String(catalog.updatedAt ?? 'undated')})`
+        + `, ${String(catalog.models.length)} models, ${String(catalog.managedModelIds.length)} managed`
+        + `, ${String(Object.keys(catalog.modelFallbacks).length)} fallbacks`
+      const signature = catalog.signatureVerified === undefined
+        ? 'unchecked: no catalogSignatureKey configured'
+        : 'verified'
+      const line = `llm-tencent-codebuddy: tt-switch catalog ${facts}, signature ${signature}`
+      // One line per read: the revision is the only thing that changes between
+      // two pulls of an unchanged file, and it changes rarely.
+      if (line !== ttSwitchAnnounced) {
+        ttSwitchAnnounced = line
+        ctx.logger.info(line)
+      }
+    } catch {
+      // A failed read keeps the previous list.
+    } finally {
+      ttSwitchAt = Date.now()
+      ttSwitchPending = false
+    }
+  }
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
+    void refreshTtSwitch()
     const snapshot = snapshotOf(current())
+    const models = effectiveCatalog(snapshot.models, ttSwitch)
+    if (models !== announced) {
+      announced = models
+      const source = models === TENCENT_CODEBUDDY_MODELS
+        ? 'the shipped catalog'
+        : models === ttSwitch ? 'the signed tt-switch release' : 'the configured list'
+      ctx.logger.info(`llm-tencent-codebuddy: ${String(models.length)} models from ${source}`)
+    }
     const key = [
-      snapshot.apiKeyEnv, snapshot.models, snapshot.timeoutMs,
-      snapshot.streamIdleTimeoutMs, snapshot.retryPolicy,
+      snapshot.apiKeyEnv, models, snapshot.timeoutMs,
+      snapshot.streamIdleTimeoutMs, snapshot.retryPolicy, snapshot.catalogSignatureKey,
     ]
     const hit = cached
     if (hit !== undefined && hit.key.every((value, index) => value === key[index])) return hit.profiles
-    const next = profileFrom(snapshot)
+    const next = profileFrom(snapshot, models)
     cached = { key, profiles: next }
     // A volatile edit lands without restarting the plugin, so the registration
     // facts are refreshed whenever the resolved snapshot moved.
