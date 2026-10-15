@@ -9,7 +9,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "prepare": "tsdown --config tsdown.prepare.config.ts && node build-client.mjs",
+    "build": "tsdown --config tsdown.prepare.config.ts && node build-client.mjs",
     "build:host": "tsdown --config tsdown.prepare.config.ts",
     "build:client": "node build-client.mjs"
   },
